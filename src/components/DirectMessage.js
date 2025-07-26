@@ -1,83 +1,121 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { collection, query, onSnapshot, addDoc, orderBy } from 'firebase/firestore';
-import { db, auth } from '../firebase';
+import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
+import { db, auth, storage } from '../firebase';
 import ChatMessage from './ChatMessage';
 
-// Accept onStartCall as a new prop
-export default function DirectMessage({ friend, userProfile, onStartCall }) {
+export default function DirectMessage({ friend, userProfile }) {
     const [messages, setMessages] = useState([]);
     const [newMessage, setNewMessage] = useState('');
+    const [isRecording, setIsRecording] = useState(false);
+    const [uploading, setUploading] = useState(false);
+    const mediaRecorder = useRef(null);
     const dummy = useRef();
     const myUid = auth.currentUser.uid;
     const friendUid = friend.id;
+    const chatRoomId = myUid < friendUid ? `${myUid}_${friendUid}` : `${friendUid}_${myUid}`;
 
     useEffect(() => {
-        const chatRoomId = myUid < friendUid ? `${myUid}_${friendUid}` : `${friendUid}_${myUid}`;
         const messagesRef = collection(db, `directMessages/${chatRoomId}/messages`);
         const q = query(messagesRef, orderBy('createdAt'));
-
         const unsubscribe = onSnapshot(q, (querySnapshot) => {
-            const msgs = [];
-            querySnapshot.forEach((doc) => {
-                msgs.push({ id: doc.id, ...doc.data() });
-            });
+            const msgs = querySnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
             setMessages(msgs);
         });
-
         return () => unsubscribe();
-    }, [friendUid, myUid]);
+    }, [chatRoomId]);
 
     useEffect(() => {
         dummy.current?.scrollIntoView({ behavior: 'smooth' });
     }, [messages]);
 
-    const sendMessage = async (e) => {
+    const sendMessage = async (content) => {
+        const messagesRef = collection(db, `directMessages/${chatRoomId}/messages`);
+        await addDoc(messagesRef, {
+            ...content,
+            createdAt: new Date(),
+            uid: myUid,
+            displayName: userProfile.displayName,
+        });
+    };
+
+    const handleTextSubmit = (e) => {
         e.preventDefault();
         if (newMessage.trim() === '') return;
-        const chatRoomId = myUid < friendUid ? `${myUid}_${friendUid}` : `${friendUid}_${myUid}`;
-        const messagesRef = collection(db, `directMessages/${chatRoomId}/messages`);
+        sendMessage({ text: newMessage });
+        setNewMessage('');
+    };
+
+    const handleFileUpload = async (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+        setUploading(true);
+        const storageRef = ref(storage, `uploads/${chatRoomId}/${Date.now()}_${file.name}`);
         try {
-            await addDoc(messagesRef, {
-                text: newMessage,
-                createdAt: new Date(),
-                uid: myUid,
-                displayName: userProfile.displayName,
-            });
-            setNewMessage('');
+            const snapshot = await uploadBytes(storageRef, file);
+            const url = await getDownloadURL(snapshot.ref);
+            sendMessage({ imageUrl: url });
         } catch (error) {
-            console.error("Error sending direct message:", error);
+            console.error("Upload failed:", error);
+        }
+        setUploading(false);
+    };
+
+    const toggleRecording = async () => {
+        if (isRecording) {
+            mediaRecorder.current.stop();
+            setIsRecording(false);
+        } else {
+            const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            mediaRecorder.current = new MediaRecorder(stream);
+            const audioChunks = [];
+            mediaRecorder.current.ondataavailable = event => audioChunks.push(event.data);
+            mediaRecorder.current.onstop = async () => {
+                const audioBlob = new Blob(audioChunks, { type: 'audio/webm' });
+                setUploading(true);
+                const storageRef = ref(storage, `uploads/${chatRoomId}/${Date.now()}_voice.webm`);
+                try {
+                    const snapshot = await uploadBytes(storageRef, audioBlob);
+                    const url = await getDownloadURL(snapshot.ref);
+                    sendMessage({ voiceUrl: url });
+                } catch (error) {
+                    console.error("Voice upload failed:", error);
+                }
+                setUploading(false);
+                stream.getTracks().forEach(track => track.stop());
+            };
+            mediaRecorder.current.start();
+            setIsRecording(true);
         }
     };
 
     return (
         <div className="flex-1 flex flex-col h-full">
-            {/* Header with Call Button */}
-            <div className="bg-gray-800 p-3 flex justify-between items-center border-b border-gray-700">
-                <h2 className="text-lg font-semibold">Chat with {friend.displayName}</h2>
-                <div className="flex gap-3">
-                    {/* The onStartCall function will now implicitly mean audio */}
-                    <button onClick={onStartCall} className="bg-green-600 hover:bg-green-700 p-2 rounded-full flex items-center gap-2 px-4">
-                         <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 5a2 2 0 012-2h3.28a1 1 0 01.948.684l1.498 4.493a1 1 0 01-.502 1.21l-2.257 1.13a11.042 11.042 0 005.516 5.516l1.13-2.257a1 1 0 011.21-.502l4.493 1.498a1 1 0 01.684.949V19a2 2 0 01-2 2h-1C9.716 21 3 14.284 3 6V5z" />
-                        </svg>
-                        <span className="font-semibold">Call</span>
-                    </button>
-                </div>
+            <div className="bg-gray-800 p-3 border-b border-gray-700">
+                <h2 className="text-lg font-semibold text-center">Chat with {friend.displayName}</h2>
             </div>
-            
             <main className="flex-1 overflow-y-auto p-6 space-y-4">
                 {messages.map(msg => <ChatMessage key={msg.id} message={msg} currentUser={auth.currentUser} />)}
                 <div ref={dummy}></div>
             </main>
-
-            <form onSubmit={sendMessage} className="bg-gray-800 p-4 flex items-center">
+            {uploading && <div className="p-2 text-center text-sm text-gray-400">Uploading...</div>}
+            <form onSubmit={handleTextSubmit} className="bg-gray-800 p-4 flex items-center gap-2">
+                <input type="file" id="image-upload" className="hidden" onChange={handleFileUpload} accept="image/*" />
+                <label htmlFor="image-upload" className="p-3 bg-gray-700 hover:bg-gray-600 rounded-full cursor-pointer">
+                    {/* Image Icon */}
+                    <svg className="w-6 h-6 text-gray-300" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l-1.586-1.586a2 2 0 00-2.828 0L6 14m6-6l.01.01" /></svg>
+                </label>
+                <button type="button" onClick={toggleRecording} className={`p-3 rounded-full ${isRecording ? 'bg-red-600 animate-pulse' : 'bg-gray-700 hover:bg-gray-600'}`}>
+                    {/* Mic Icon */}
+                    <svg className="w-6 h-6 text-gray-300" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" /></svg>
+                </button>
                 <input
                     value={newMessage}
                     onChange={(e) => setNewMessage(e.target.value)}
                     placeholder={`Message ${friend.displayName}...`}
                     className="flex-1 bg-gray-700 rounded-full px-5 py-3 focus:outline-none focus:ring-2 focus:ring-blue-500 text-white"
                 />
-                <button type="submit" disabled={!newMessage.trim()} className="ml-4 bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 px-6 rounded-full disabled:opacity-50 disabled:cursor-not-allowed transition-colors duration-200">
+                <button type="submit" disabled={!newMessage.trim()} className="bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 px-6 rounded-full disabled:opacity-50">
                     Send
                 </button>
             </form>

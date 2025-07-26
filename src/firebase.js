@@ -1,34 +1,29 @@
 import { initializeApp } from 'firebase/app';
 import { getAuth } from 'firebase/auth';
 import { getFirestore } from 'firebase/firestore';
+import { getStorage } from 'firebase/storage'; // Import Firebase Storage
 
 // Your web app's Firebase configuration
 const firebaseConfig = {
-  apiKey: "AIzaSyDdmgUVlLZICknS0YFA4xVAw_kXnbwMnyA",
-  authDomain: "my-chat-app-4b0a5.firebaseapp.com",
-  projectId: "my-chat-app-4b0a5",
-  storageBucket: "my-chat-app-4b0a5.appspot.com",
-  messagingSenderId: "108847860844",
-  appId: "1:108847860844:web:70a2590ba02621b42e9c49",
-  measurementId: "G-GV33H2TW7V"
+  apiKey: process.env.REACT_APP_API_KEY,
+  authDomain: process.env.REACT_APP_AUTH_DOMAIN,
+  projectId: process.env.REACT_APP_PROJECT_ID,
+  storageBucket: process.env.REACT_APP_STORAGE_BUCKET,
+  messagingSenderId: process.env.REACT_APP_MESSAGING_SENDER_ID,
+  appId: process.env.REACT_APP_APP_ID,
+  measurementId: process.env.REACT_APP_MEASUREMENT_ID
 };
-
-
 // Initialize Firebase
 let app;
 try {
     app = initializeApp(firebaseConfig);
 } catch (error) {
     console.error("Error initializing Firebase:", error);
-    // This can happen with hot-reloading. We'll try to get the existing app.
     if (error.code === 'duplicate-app') {
-        app = initializeApp(firebaseConfig, "secondary"); // Give it a unique name
-    } else {
-        // Handle other errors
+        app = initializeApp(firebaseConfig, "secondary");
     }
 }
-
-
 // Export the instances for use in other parts of the app
 export const auth = getAuth(app);
 export const db = getFirestore(app);
+export const storage = getStorage(app); // Export Firebase Storage instance
